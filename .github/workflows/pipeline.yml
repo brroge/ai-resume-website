@@ -1,0 +1,79 @@
+name: AI Resume CI/CD Pipeline
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+
+env:
+  AWS_REGION: us-east-2
+  S3_BUCKET: ai-resume-brr
+
+jobs:
+
+  deploy-beta:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy Infrastructure
+        run: |
+          aws cloudformation deploy \
+            --stack-name ai-resume-infra \
+            --template-file cloudformation/infrastructure.yml \
+            --parameter-overrides BucketName=${{ env.S3_BUCKET }} \
+            --capabilities CAPABILITY_NAMED_IAM
+
+      - name: Generate Resume Website (BETA)
+        env:
+          ENVIRONMENT: beta
+        run: python generate_resume.py
+
+      - name: Analyze Resume (BETA)
+        env:
+          ENVIRONMENT: beta
+        run: python analyze_resume.py
+
+
+  deploy-prod:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: deploy-beta
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Promote Beta to Production
+        run: |
+          aws s3 cp \
+            s3://${{ env.S3_BUCKET }}/beta/index.html \
+            s3://${{ env.S3_BUCKET }}/prod/index.html \
+            --content-type text/html
